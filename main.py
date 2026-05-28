@@ -2,8 +2,6 @@ import flet as ft
 from bs4 import BeautifulSoup, NavigableString
 import uuid
 import json
-import tkinter as tk
-from tkinter import filedialog
 
 def main(page: ft.Page):
     page.title = "Tonika Converter"
@@ -14,7 +12,7 @@ def main(page: ft.Page):
     page.data = {"extraidos": None}
 
     texto_estado = ft.Text("Esperando archivo .htm / .html...", color=ft.Colors.GREY_400)
-    texto_detalles = ft.Text("", size=14, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
+    texto_detalles = ft.Text("Versión Unificada Multiplataforma", size=14, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
 
     # --- LÓGICA DE EXTRACCIÓN AVANZADA ---
     def extraer_datos(ruta_archivo):
@@ -36,19 +34,17 @@ def main(page: ft.Page):
         letra_y_acordes = ""
         
         if pre_tag:
-            # 1. Marcamos los acordes de forma invisible para no perder su posición
             def get_marked_text(element):
                 if isinstance(element, NavigableString):
                     return str(element)
                 text = ""
-                # Cifra Club encierra los acordes en etiquetas <b>
                 is_chord = getattr(element, 'name', '') == 'b'
                 if is_chord:
-                    text += '\x01' # Marca de inicio de acorde
+                    text += '\x01'
                 for child in element:
                     text += get_marked_text(child)
                 if is_chord:
-                    text += '\x02' # Marca de fin de acorde
+                    text += '\x02'
                 return text
 
             raw_marked_text = get_marked_text(pre_tag)
@@ -76,45 +72,49 @@ def main(page: ft.Page):
             merged_lines = []
             i = 0
             
-            # 2. Leemos el texto línea por línea fusionando los acordes con sus sílabas
             while i < len(lines):
                 line = lines[i]
                 
-                # ¿Es una línea de acordes?
+                if line.strip('\r\n\t ') == "":
+                    i += 1
+                    continue
+                
                 if '\x01' in line:
                     chords = parse_chord_line(line)
                     
-                    # Verificamos si la línea inmediatamente inferior es la letra
-                    if i + 1 < len(lines) and '\x01' not in lines[i+1] and lines[i+1].strip() != "":
-                        lyric_line = lines[i+1]
+                    next_i = i + 1
+                    while next_i < len(lines) and lines[next_i].strip('\r\n\t ') == "":
+                        next_i += 1
+                        
+                    if next_i < len(lines) and '\x01' not in lines[next_i]:
+                        lyric_line = lines[next_i]
                         max_pos = max([c['pos'] for c in chords]) if chords else 0
                         
-                        # Si la línea de letra es muy corta, la rellenamos con espacios
                         if len(lyric_line) < max_pos:
                             lyric_line = lyric_line.ljust(max_pos)
 
-                        # Insertamos los acordes de derecha a izquierda para no alterar las posiciones
                         for c in reversed(chords):
                             pos = c['pos']
                             lyric_line = lyric_line[:pos] + f"[{c['name']}]" + lyric_line[pos:]
 
-                        # Protegemos los dobles espacios para que Flet no los colapse
-                        lyric_line = lyric_line.replace('  ', ' \xA0')
-                        merged_lines.append(lyric_line.rstrip())
-                        i += 2 # Saltamos la línea de letra porque ya la fusionamos
-                    
+                        merged_lines.append(lyric_line)
+                        i = next_i + 1 
                     else:
-                        # Es una línea de acordes independiente (como la Intro)
                         clean_line = line.replace('\x01', '[').replace('\x02', ']')
-                        clean_line = clean_line.replace('  ', ' \xA0') # Protegemos el espaciado
                         merged_lines.append(clean_line)
-                        i += 1
+                        i = next_i
                 else:
-                    # Es una línea de texto normal (ej. [Primera Parte])
-                    merged_lines.append(line.replace('  ', ' \xA0'))
+                    merged_lines.append(line)
                     i += 1
 
-            letra_y_acordes = '\n'.join(merged_lines)
+            final_lines = []
+            for line in merged_lines:
+                line_spaced = line
+                while '  ' in line_spaced:
+                    line_spaced = line_spaced.replace('  ', ' \xA0')
+                final_lines.append(line_spaced.rstrip())
+
+            letra_y_acordes = '\n'.join(final_lines)
 
         return {
             "titulo": titulo,
@@ -126,76 +126,68 @@ def main(page: ft.Page):
             "id": str(uuid.uuid4())
         }
 
-    # --- EXPLORADORES NATIVOS CON TKINTER ---
-    def abrir_archivo_web(e):
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes('-topmost', 1)
-        
-        ruta_html = filedialog.askopenfilename(
-            title="Seleccionar archivo web de Cifra Club",
-            filetypes=[("Archivos Web", "*.htm *.html")]
-        )
-        root.destroy()
-        
-        if ruta_html:
-            try:
-                datos = extraer_datos(ruta_html)
-                page.data["extraidos"] = datos
-                texto_estado.value = "¡Archivo analizado con éxito!"
-                texto_estado.color = ft.Colors.GREEN_400
-                texto_detalles.value = f"♫ {datos['titulo']} - {datos['artista']}"
-                btn_guardar.disabled = False
-            except Exception as ex:
-                texto_estado.value = "Error al leer el archivo web."
-                texto_estado.color = ft.Colors.ERROR
-                texto_detalles.value = str(ex)
-                btn_guardar.disabled = True
-            page.update()
+    # --- RUTINAS PARA EL ÉXITO ---
+    def procesar_exito(ruta_html):
+        try:
+            datos = extraer_datos(ruta_html)
+            page.data["extraidos"] = datos
+            texto_estado.value = "¡Archivo analizado con éxito!"
+            texto_estado.color = ft.Colors.GREEN_400
+            texto_detalles.value = f"♫ {datos['titulo']} - {datos['artista']}"
+            btn_guardar.disabled = False
+        except Exception as ex:
+            texto_estado.value = "Error al leer el archivo web."
+            texto_estado.color = ft.Colors.ERROR
+            texto_detalles.value = str(ex)
+            btn_guardar.disabled = True
+        page.update()
 
-    def guardar_archivo_tnk(e):
-        datos = page.data.get("extraidos")
-        if not datos:
-            return
+    def procesar_guardado(datos, ruta_guardado):
+        try:
+            if not ruta_guardado.endswith('.tnk'):
+                ruta_guardado += '.tnk'
+            with open(ruta_guardado, "w", encoding="utf-8") as f:
+                json.dump(datos, f, indent=4, ensure_ascii=False)
 
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes('-topmost', 1)
+            texto_estado.value = "¡Archivo .tnk exportado exitosamente!"
+            texto_estado.color = ft.Colors.GREEN_400
+            texto_detalles.value = "Listo para Tonika."
+            btn_guardar.disabled = True 
+        except Exception as ex:
+            texto_estado.value = "Error al guardar el archivo."
+            texto_estado.color = ft.Colors.ERROR
+            texto_detalles.value = str(ex)
+        page.update()
 
-        nombre_sugerido = f"{datos['titulo'].replace(' ', '_')}_{datos['artista'].replace(' ', '_')}.tnk"
+    # --- INSTANCIACIÓN DE SERVICIOS UNIVERSALES ---
+    picker_abrir = ft.FilePicker()
+    picker_guardar = ft.FilePicker()
+    
+    # Ahora añadimos el FilePicker como servicio SIEMPRE (PC y Móvil)
+    if hasattr(page, "services"):
+        page.services.append(picker_abrir)
+        page.services.append(picker_guardar)
 
-        ruta_guardado = filedialog.asksaveasfilename(
-            title="Exportar canción Tonika",
-            initialfile=nombre_sugerido,
-            defaultextension=".tnk",
-            filetypes=[("Archivos Tonika", "*.tnk")]
-        )
-        root.destroy()
+    # --- ENRUTADORES PRINCIPALES ASÍNCRONOS ---
+    async def btn_abrir_click(e):
+        archivos = await picker_abrir.pick_files(allowed_extensions=["htm", "html"])
+        if archivos and len(archivos) > 0:
+            procesar_exito(archivos[0].path)
 
-        if ruta_guardado:
-            try:
-                if not ruta_guardado.endswith('.tnk'):
-                    ruta_guardado += '.tnk'
-                
-                with open(ruta_guardado, "w", encoding="utf-8") as f:
-                    json.dump(datos, f, indent=4, ensure_ascii=False)
-
-                texto_estado.value = "¡Archivo .tnk exportado exitosamente!"
-                texto_estado.color = ft.Colors.GREEN_400
-                texto_detalles.value = "Ya puedes importarlo a tu biblioteca en Tonika."
-                btn_guardar.disabled = True
-            except Exception as ex:
-                texto_estado.value = "Error al guardar el archivo."
-                texto_estado.color = ft.Colors.ERROR
-                texto_detalles.value = str(ex)
-            page.update()
+    async def btn_guardar_click(e):
+        nombre = f"{page.data.get('extraidos', {}).get('titulo', 'cancion').replace(' ', '_')}.tnk" if page.data.get('extraidos') else "cancion.tnk"
+        ruta = await picker_guardar.save_file(file_name=nombre, allowed_extensions=["tnk"])
+        if ruta:
+            datos = page.data.get("extraidos")
+            if datos:
+                procesar_guardado(datos, ruta)
 
     # --- INTERFAZ GRÁFICA ---
     btn_abrir = ft.FilledButton(
         "1. Cargar archivo web (.htm)",
         icon=ft.Icons.UPLOAD_FILE,
         height=50,
-        on_click=abrir_archivo_web
+        on_click=btn_abrir_click
     )
 
     btn_guardar = ft.FilledButton(
@@ -204,7 +196,7 @@ def main(page: ft.Page):
         height=50,
         disabled=True, 
         style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_600),
-        on_click=guardar_archivo_tnk
+        on_click=btn_guardar_click
     )
 
     page.add(

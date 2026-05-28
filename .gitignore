@@ -1,3 +1,9 @@
+# Entorno virtual
 venv/
+
+# Caché de Python
 __pycache__/
-*.tnk
+*.pyc
+
+# Archivos de compilación de Flet / Android
+build/
