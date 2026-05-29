@@ -2,6 +2,7 @@ import flet as ft
 from bs4 import BeautifulSoup, NavigableString
 import uuid
 import json
+import os # <-- Añadido necesario para manejar las carpetas en Android
 
 def main(page: ft.Page):
     page.title = "Tonika Converter"
@@ -163,7 +164,6 @@ def main(page: ft.Page):
     picker_abrir = ft.FilePicker()
     picker_guardar = ft.FilePicker()
     
-    # Ahora añadimos el FilePicker como servicio SIEMPRE (PC y Móvil)
     if hasattr(page, "services"):
         page.services.append(picker_abrir)
         page.services.append(picker_guardar)
@@ -176,11 +176,25 @@ def main(page: ft.Page):
 
     async def btn_guardar_click(e):
         nombre = f"{page.data.get('extraidos', {}).get('titulo', 'cancion').replace(' ', '_')}.tnk" if page.data.get('extraidos') else "cancion.tnk"
-        ruta = await picker_guardar.save_file(file_name=nombre, allowed_extensions=["tnk"])
-        if ruta:
-            datos = page.data.get("extraidos")
-            if datos:
-                procesar_guardado(datos, ruta)
+        
+        # Estrategia dinámica dependiendo de la plataforma
+        es_movil = page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
+        
+        if es_movil:
+            # En Android/iOS usamos el selector de carpetas
+            ruta_carpeta = await picker_guardar.get_directory_path(dialog_title="Selecciona dónde guardar la canción")
+            if ruta_carpeta:
+                ruta_completa = os.path.join(ruta_carpeta, nombre)
+                datos = page.data.get("extraidos")
+                if datos:
+                    procesar_guardado(datos, ruta_completa)
+        else:
+            # En PC usamos la ventana clásica de "Guardar como..."
+            ruta = await picker_guardar.save_file(file_name=nombre, allowed_extensions=["tnk"])
+            if ruta:
+                datos = page.data.get("extraidos")
+                if datos:
+                    procesar_guardado(datos, ruta)
 
     # --- INTERFAZ GRÁFICA ---
     btn_abrir = ft.FilledButton(
