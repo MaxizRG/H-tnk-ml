@@ -2,7 +2,8 @@ import flet as ft
 from bs4 import BeautifulSoup, NavigableString
 import uuid
 import json
-import os # <-- Añadido necesario para manejar las carpetas en Android
+import os 
+import base64 # <-- Esencial para forzar descargas en la web
 
 def main(page: ft.Page):
     page.title = "Tonika Converter"
@@ -16,9 +17,15 @@ def main(page: ft.Page):
     texto_detalles = ft.Text("Versión Unificada Multiplataforma", size=14, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
 
     # --- LÓGICA DE EXTRACCIÓN AVANZADA ---
-    def extraer_datos(ruta_archivo):
-        with open(ruta_archivo, "r", encoding="utf-8") as f:
-            soup = BeautifulSoup(f, "html.parser")
+    # Le añadimos un parámetro es_web para decidir cómo leer la fuente
+    def extraer_datos(fuente, es_web=False):
+        if es_web:
+            # En la web, fuente ya trae los bytes crudos del archivo HTML
+            soup = BeautifulSoup(fuente, "html.parser")
+        else:
+            # En PC/Móvil, fuente es la ruta física del archivo
+            with open(fuente, "r", encoding="utf-8") as f:
+                soup = BeautifulSoup(f, "html.parser")
 
         titulo_tag = soup.find("h1", class_="t1")
         titulo = titulo_tag.text.strip() if titulo_tag else "Sin título"
@@ -128,14 +135,24 @@ def main(page: ft.Page):
         }
 
     # --- RUTINAS PARA EL ÉXITO ---
-    def procesar_exito(ruta_html):
+    def procesar_exito(fuente, es_web=False):
         try:
-            datos = extraer_datos(ruta_html)
+            datos = extraer_datos(fuente, es_web)
             page.data["extraidos"] = datos
             texto_estado.value = "¡Archivo analizado con éxito!"
             texto_estado.color = ft.Colors.GREEN_400
             texto_detalles.value = f"♫ {datos['titulo']} - {datos['artista']}"
             btn_guardar.disabled = False
+            
+            # MAGIA WEB: Si estamos en el navegador, incrustamos los datos directamente en el botón
+            # para que funcione como un enlace de descarga nativo sin depender del sistema operativo.
+            if page.web:
+                json_str = json.dumps(datos, indent=4, ensure_ascii=False)
+                b64 = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                nombre = f"{datos['titulo'].replace(' ', '_')}.tnk"
+                btn_guardar.url = f"data:application/octet-stream;charset=utf-8;base64,{b64}"
+                btn_guardar.url_target = "_blank"
+                
         except Exception as ex:
             texto_estado.value = "Error al leer el archivo web."
             texto_estado.color = ft.Colors.ERROR
@@ -170,18 +187,44 @@ def main(page: ft.Page):
 
     # --- ENRUTADORES PRINCIPALES ASÍNCRONOS ---
     async def btn_abrir_click(e):
-        archivos = await picker_abrir.pick_files(allowed_extensions=["htm", "html"])
+        # NOTA: Activamos with_data=True para pedirle a Flet que atrape los bytes en lugar de la ruta local
+        archivos = await picker_abrir.pick_files(allowed_extensions=["htm", "html"], with_data=True)
         if archivos and len(archivos) > 0:
-            procesar_exito(archivos[0].path)
+            archivo = archivos[0]
+            
+            if page.web:
+                # Rastreamos la propiedad dinámica que la versión de Flet usa para guardar los bytes
+                contenido = None
+                for attr in ["data", "bytes", "read_bytes", "content"]:
+                    if hasattr(archivo, attr) and getattr(archivo, attr) is not None:
+                        contenido = getattr(archivo, attr)
+                        break
+                        
+                if contenido:
+                    procesar_exito(contenido, es_web=True)
+                else:
+                    texto_estado.value = "Error: La API del navegador bloqueó la lectura."
+                    texto_estado.color = ft.Colors.ERROR
+                    page.update()
+            else:
+                procesar_exito(archivo.path, es_web=False)
 
     async def btn_guardar_click(e):
+        # Si estamos en la Web, el botón ya tiene el URL inyectado y el navegador hizo la descarga por sí solo
+        if page.web:
+            texto_estado.value = "¡Descarga iniciada en tu navegador!"
+            texto_estado.color = ft.Colors.GREEN_400
+            texto_detalles.value = "Listo para Tonika."
+            btn_guardar.disabled = True
+            btn_guardar.url = None # Reseteamos el botón
+            page.update()
+            return
+            
         nombre = f"{page.data.get('extraidos', {}).get('titulo', 'cancion').replace(' ', '_')}.tnk" if page.data.get('extraidos') else "cancion.tnk"
-        
-        # Estrategia dinámica dependiendo de la plataforma
         es_movil = page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
         
         if es_movil:
-            # En Android/iOS usamos el selector de carpetas
+            # Android/iOS
             ruta_carpeta = await picker_guardar.get_directory_path(dialog_title="Selecciona dónde guardar la canción")
             if ruta_carpeta:
                 ruta_completa = os.path.join(ruta_carpeta, nombre)
@@ -189,7 +232,7 @@ def main(page: ft.Page):
                 if datos:
                     procesar_guardado(datos, ruta_completa)
         else:
-            # En PC usamos la ventana clásica de "Guardar como..."
+            # PC (Windows, Mac)
             ruta = await picker_guardar.save_file(file_name=nombre, allowed_extensions=["tnk"])
             if ruta:
                 datos = page.data.get("extraidos")

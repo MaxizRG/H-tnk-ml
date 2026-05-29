@@ -1,6 +1,6 @@
 {
-  "name": "docs",
-  "short_name": "docs",
+  "name": "src_web",
+  "short_name": "src_web",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#FFFFFF",
